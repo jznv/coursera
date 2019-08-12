@@ -1,0 +1,145 @@
+---
+title: "Practical Machine Learning Course Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Overview
+
+The goal of this project is to build a machine learning model that identifies whether a participant performs Unilateral Dumbbell Biceps Curl correctly or performs it with one of the 4 common mistakes based on personal activity data. 
+
+## Background (from course project instruction)
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+
+## Data
+
+The training data for this project are available here:
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here:
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+## Data preprossessing
+
+Load train and test data.
+
+```{r}
+trainRaw <- read.csv("pml-training.csv", header = TRUE)
+testRaw <- read.csv("pml-testing.csv", header = TRUE)
+```
+
+Check out the outcome variable we are trying to predict. A is performing the exercise correctly while B, C, D and E represent 4 common mistakes while performing the exercise.
+
+```{r}
+summary(trainRaw$classe)
+```
+
+Inspect the structure of train data.
+
+```{r}
+str(trainRaw, list.len = 20)
+```
+
+We can see that X is the index of the rows which shouldn't be included when training the model. There are a few time stamp columns that can be removed from training set as well. 
+
+It's unclear what new_window and num_window are so we examine if there's any association between them and the outcome variable to determine if to remove them. It appears new_window is proportional across the different outcome so removing it wouldn't affect the result, and num_window aligns too perfectly with the outcome so it should not be included in model training. Hence, we will remove both of them.
+
+```{r}
+table(trainRaw$new_window,trainRaw$classe)
+head(table(trainRaw$num_window,trainRaw$classe),20)
+```
+
+We can also see that some columns such as kurtosis_yaw_belt or skewness_yaw_belt contains either invalid values or missing value so they will be removed from training data. 
+
+Now we remove the columns aforementioned.
+
+```{r}
+toDrop <- c("X", "raw_timestamp_part_1","raw_timestamp_part_2", "cvtd_timestamp", # Index and time columns
+            "new_window", "num_window", # no effect or associated with outcome
+            "kurtosis_yaw_belt", "skewness_yaw_belt", "amplitude_yaw_belt", "kurtosis_yaw_dumbbell", 
+            "skewness_yaw_dumbbell", "amplitude_yaw_dumbbell", "kurtosis_yaw_forearm", "amplitude_yaw_forearm" # no meaningful values
+            )
+
+training <- trainRaw[, !(names(trainRaw) %in% toDrop)]
+```
+
+In addition, we noticed some columns are of type factor but probably should be numeric. We convert these columns to numeric.
+
+```{r warning=FALSE}
+# Get names of columns of factor type
+facCols <- sapply(training, is.factor)
+facCols <- names(facCols)[facCols]
+facCols <- facCols[!(facCols %in% c("user_name","classe"))]
+# Convert factor columns to numeric except for user_name and classe
+training[, facCols] <- sapply(training[, facCols], as.character) 
+training[, facCols] <- sapply(training[, facCols], as.numeric)
+```
+
+Impute NAs with 0's.
+
+```{r}
+# Check % of NAs in each column
+naPct <- apply(training, 2, function(col)sum(is.na(col))/length(col))
+# Get columns names with NAs
+naColnames <- names(naPct)[which(naPct != 0)]
+# Replace NAs with 0's 
+for(i in 1:length(naColnames))
+{training[is.na(training[,naColnames[i]]),naColnames[i]] <- 0
+}
+```
+
+Next, we prepare the test dataset to be consistent with train data by removing the same columns, then check NAs. We see that the columns are either 100% non-NAs or 100% NAs so we will impute those columns with zeros. 
+
+```{r}
+testing <- testRaw[, !(names(testRaw) %in% toDrop)]
+
+# Check % of NAs in each column
+naPct <- apply(testing, 2, function(col)sum(is.na(col))/length(col))
+# Check unique values of % na
+unique(naPct)
+# Get columns names with 100% NAs
+naColnames <- names(naPct)[which(naPct == 1)]
+# Impute NAs with 0's
+for(i in 1:length(naColnames))
+{testing[is.na(testing[,naColnames[i]]),naColnames[i]] <- 0
+}
+```
+
+## Model Training
+
+Now we build the classification model using random forest with cross validation. The model uses 3 fold cross validation to try to find optimal accuracy.
+
+```{r eval = FALSE}
+mod <- train(classe ~., method = "rf", data = training, 
+             trControl = trainControl(method = "cv", number = 3, verboseIter = TRUE))
+```
+
+Upon completion of model training, we print out some of the results and performance metrics of the best tuned model.
+
+```{r echo = FALSE}
+load("PML course project.RData")
+library(caret)
+```
+
+```{r}
+# Metrics by number of variables used in split
+mod$results
+# OOB error rate
+mod$finalModel$err.rate[500,1]
+```
+
+As shown, the best accuracy is 0.9925 and the estimated out-of-the-bag sample error rate is 0.43% for the final model. 
+
+## Prediction
+
+Use the model for prediction on the test set.
+
+```{r}
+pred <- predict(mod, testing)
+pred
+```
+
